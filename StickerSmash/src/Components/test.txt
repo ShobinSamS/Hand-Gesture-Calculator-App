@@ -1,0 +1,261 @@
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
+import { Camera } from 'expo-camera'; // Ensure this import is correct
+import Tflite from 'react-native-tflite';
+
+const { width, height } = Dimensions.get('window');
+
+export default function LiveDetection() {
+  const [hasPermission, setHasPermission] = useState(null);
+  const [detections, setDetections] = useState([]);
+  const cameraRef = useRef(null);
+  const tflite = new Tflite();
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      setHasPermission(status === 'granted');
+
+      // Load TFLite model
+      tflite.loadModel(
+        {
+          model: 'path_to_model.tflite', // Replace with your TFLite model file path
+          labels: 'path_to_labels.txt',   // Replace with your labels file path
+        },
+        (err, res) => {
+          if (err) console.error('Model load error:', err);
+          else console.log('Model loaded successfully');
+        }
+      );
+    })();
+  }, []);
+
+  const processFrame = async (photo) => {
+    tflite.runModelOnImage(
+      {
+        path: photo.uri, // The frame URI
+        imageMean: 128,
+        imageStd: 128,
+        numResults: 5,
+        threshold: 0.5,
+      },
+      (err, res) => {
+        if (err) console.error(err);
+        else setDetections(res);
+      }
+    );
+  };
+
+  const takePicture = async () => {
+    if (cameraRef.current) {
+      const photo = await cameraRef.current.takePictureAsync();
+      processFrame(photo);
+    }
+  };
+
+  if (hasPermission === null) {
+    return <View />;
+  }
+  if (hasPermission === false) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.message}>We need your permission to show the camera</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <Camera
+        ref={cameraRef}
+        style={styles.camera}
+        type={Camera.Constants.Type.back}
+        onCameraReady={() => {
+          console.log("Camera is ready!");
+        }}
+        onMountError={(error) => {
+          console.log("Camera error: ", error);
+        }}
+      />
+      <TouchableOpacity style={styles.button} onPress={takePicture}>
+        <Text style={styles.buttonText}>Detect Objects</Text>
+      </TouchableOpacity>
+      {detections.length > 0 && (
+        <View style={styles.detectionsContainer}>
+          {detections.map((detection, index) => (
+            <Text key={index} style={styles.detectionText}>
+              {detection.label} - {Math.round(detection.confidence * 100)}%
+            </Text>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// Styling
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  camera: {
+    flex: 1,
+    width: width,
+    height: height,
+  },
+  button: {
+    position: 'absolute',
+    bottom: 30,
+    left: width / 2 - 75,
+    width: 150,
+    height: 50,
+    backgroundColor: 'blue',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 5,
+  },
+  buttonText: {
+    color: 'white',
+    fontSize: 16,
+  },
+  detectionsContainer: {
+    position: 'absolute',
+    top: 20,
+    left: 10,
+  },
+  detectionText: {
+    color: 'yellow',
+    fontSize: 16,
+  },
+});
+
+
+// First install these dependencies:
+// expo install expo-camera tensorflow-lite-react-native expo-file-system
+
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, View, Text, Dimensions } from 'react-native';
+import { Camera } from 'expo-camera';
+import * as tf from 'tensorflow-lite-react-native';
+import * as FileSystem from 'expo-file-system';
+
+const TFLiteCamera = () => {
+  const [hasPermission, setHasPermission] = useState(null);
+  const [predictions, setPredictions] = useState([]);
+  const cameraRef = useRef(null);
+  const modelPath = FileSystem.documentDirectory + 'model.tflite';
+  const [isModelReady, setIsModelReady] = useState(false);
+  const tflite = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      // Request camera permissions
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      setHasPermission(status === 'granted');
+
+      // Initialize TFLite
+      try {
+        // Download and save your model file
+        // Replace URL with your model's URL
+        await FileSystem.downloadAsync(
+          'YOUR_MODEL_URL',
+          modelPath
+        );
+
+        // Initialize TFLite
+        tflite.current = await tf.createTFLiteModel(modelPath);
+        setIsModelReady(true);
+      } catch (error) {
+        console.error('Error loading model:', error);
+      }
+    })();
+
+    return () => {
+      // Cleanup
+      if (tflite.current) {
+        tflite.current.release();
+      }
+    };
+  }, []);
+
+  const processImage = async () => {
+    if (cameraRef.current && isModelReady) {
+      try {
+        // Take a picture
+        const photo = await cameraRef.current.takePictureAsync({
+          quality: 0.5,
+          base64: true,
+          skipProcessing: true
+        });
+
+        // Process image with TFLite
+        const response = await tflite.current.runModel({
+          input: photo.base64,
+          inputShape: [1, 224, 224, 3], // Adjust based on your model
+          outputShape: [1, 1000] // Adjust based on your model
+        });
+
+        // Handle predictions
+        setPredictions(response);
+      } catch (error) {
+        console.error('Error processing image:', error);
+      }
+    }
+  };
+
+  useEffect(() => {
+    // Process frames periodically
+    const interval = setInterval(processImage, 1000);
+    return () => clearInterval(interval);
+  }, [isModelReady]);
+
+  if (hasPermission === null) {
+    return <View><Text>Requesting camera permission...</Text></View>;
+  }
+  if (hasPermission === false) {
+    return <View><Text>No access to camera</Text></View>;
+  }
+
+  return (
+    <View style={styles.container}>
+      <Camera
+        ref={cameraRef}
+        style={styles.camera}
+        type={Camera.Constants.Type.back}
+      />
+      <View style={styles.predictions}>
+        <Text style={styles.predictionsText}>
+          {JSON.stringify(predictions, null, 2)}
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  camera: {
+    flex: 1,
+  },
+  predictions: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    padding: 20,
+  },
+  predictionsText: {
+    color: 'white',
+    fontSize: 16,
+  },
+});
+
+export default TFLiteCamera;
+
+Will this work in react native expo? Also what this code does?
+
+
